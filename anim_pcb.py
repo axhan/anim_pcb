@@ -7,9 +7,10 @@ from dataclasses import dataclass, field
 #***** Global variables ********************************************************
 global glob 	# 8 marsSet to new instance of class Globals in main()
 #***** Classes *****************************************************************
+
+# ANSI-sequences for text styles and colours when print()ing in terminal.
+# Never instantiated, its class attributes are referred directly.
 class term:
-	# ANSI-sequences for changing terminal text styles and colours.
-	bög	=					-1
 	normal = reset = nor =	'\033[0m'
 	bold =					'\033[01m'
 	italics =				'\033[3m'
@@ -27,13 +28,6 @@ class term:
 	call = 					values + italics
 	extra =					normal + grey
 # /class term
-
-
-@dataclass(eq=False)
-class WH:
-	w:				int		=	-1
-	h:				int		=	-1
-# /class
 
 
 # One instance for each "--segment" argument given on the commandline. Must
@@ -60,20 +54,29 @@ class SegmentSpec:
 # Global variables kept in a class both to isolate their namespace and for aesthetics.
 @dataclass(eq=False)
 class Globals:
-	# Things from command line arguments
-	pcb_file:		str					=	None
-	out_file:		str					=	None
-	ffmpeg_exe:		str					=	"ffmpeg"
-	kicad_cli_exe:	str					=	"kicad-cli-nightly"
-	clobber:		bool				=	False
-	debug_mode:		bool				=	False
-	vid_fps:		int					=	30
-	segment_args:	list[str]			=	field(default_factory=list)
-	max_threads:	int					=	8
-	img_suffix:		str					=	None
-	tmp_dir:		str					=	'.'
-	vid_res:		str					=	None
-	# Intermediate data
+	# Settings from command line arguments
+	pcb_file:		str			=	None
+	out_file:		str			=	None
+	ffmpeg_exe:		str			=	None
+	img_format:		str			=	None
+	kc_background:	str			=	None
+	kc_floor:		bool		=	None
+	kc_perspective:	bool		=	None
+	kc_pivot:		str			=	None
+	kc_preset:		str			=	None
+	kc_quality:		str			=	None
+	kicad_cli_exe:	str			=	None
+	nocolor:		bool		=	None
+	overwrite:		bool		=	None
+	debug_mode:		bool		=	None
+	vid_fps:		int			=	None
+	segment_args:	list[str]	=	field(default_factory=list)
+	max_threads:	int			=	None
+	img_suffix:		str			=	None
+	tmp_dir:		str			=	None
+	vid_res:		str			=	None
+
+	# Settings calculated from command line arguments
 	img_base_name:	str					=	None
 	segments:		list[SegmentSpec]	=	field(default_factory=list)
 	vid_dx:			int					=	-1	# in pixels
@@ -81,7 +84,8 @@ class Globals:
 	vid_fpms:		float				=	-1
 	vid_frames:		int					=	0	# frames/ms
 	vid_ms:			int					=	0	# in ms
-	#
+
+	# List of running processes
 	proc_list:		list[subprocess.Popen] = field(default_factory=list)
 # /class Globals
 
@@ -190,21 +194,21 @@ def parse_cmdline() -> None:
 		raise argparse.ArgumentTypeError(f"must be e.g. 640x480")
 	# /def
 
-	parser = argparse.ArgumentParser(description='Sausage', allow_abbrev=False,
-							formatter_class=argparse.RawDescriptionHelpFormatter,
-							epilog='''
-Parallellized PCB animation video creation by calling multiple kicad-cli-nightly instances to make the individual frames, then joining them to a video with ffmpeg.
+	parser = argparse.ArgumentParser(
+		description='Parallellized PCB animation video creation by calling multiple kicad-cli-nightly instances to make the individual frames, then joining them to a video with ffmpeg.',
+		allow_abbrev=False,	formatter_class=argparse.RawDescriptionHelpFormatter,
+		epilog='''
 
-A bit of a work-in-progress, aka an ugly hack. Python is a language I have to relearn every time I use it.
 
-Animation segment definition expected by the --segment arg:
+******************************************************************************
+Animation segment expression segm_expr (as expected by the --segment arg):
 
-anim_expr	::= duration ["ms"] SEP from_expr TRFORM_SEP toward_expr
+segm_expr	::= duration ("s" | "ms") SEP from_expr TRFORM_SEP toward_expr
 from_expr	::= toward_expr
 toward_expr	::= zoom SEP rot_expr [SEP pan_expr]
 rot_expr	::= rotax SEP rotay SEP rotaz
-pan_expr	::=	panax SEP panay SEP panaz
-duration	::= integer
+pan_expr	::= panax SEP panay SEP panaz
+duration	::= floatnumber
 rotax		::= floatnumber
 rotay		::= floatnumber
 rotaz		::= floatnumber
@@ -215,77 +219,123 @@ TRFORM_SEP	::= [ign_chars] "->" [ign_chars]
 SEP			::= [ign_chars] "," [ign_chars]
 ign_chars	::= (SP | TAB | NEWLINE | "(" | ")" | "[" | "]" | "{" | "}")*
 
-Whitespace and "()[]{}" are stripped before parsing the definitions, so these can be used to e.g. group the parameters, as reading aids for ease-of-overview. For the same reason, any "ms" immediately following the (duration) is stripped.
-
+Whitespace and "()[]{}" are stripped before parsing the --segment strings, so these can be used to e.g. group the parameters, as reading aids for ease-of-overview.
 
 (rotax, rotay, rotaz) define the PCBs rotation around the x,y,z-axii.
-(panax, panay, panaz), if included, define the viewpoint's panning. Not really tested extensively.
-(duration) is the target playing time of the animation segment. The animation segment will consist of (fps * duration / 1000) frames.
+(panax, panay, panaz), if included, define the viewpoint's panning. Not really tested extensivatall.
+(duration) is the target playing time of the animation segment. The animation segment will consist of (fps * duration in s) frames.
 (zoom) is the camera zoomin.
 kicad_cli seems to dislike angles outside the [-360..360] range, so keep within. I should probably do a remainder division thing in the future.
 
 Multiple --segment args can be used. The resulting video will have them following each other in-order. The "from"-params of the 2nd segment should be equal to the "toward"-params of the 1st, etc for continuous, seamless rotation.
 
 Examples:
---segment "1000,1.0,0,0,0->1.0,-180,30,45"
-same with reading aids:
---segment "1000ms,	1.0,	(0,0,0) -> 1.0, (-180,30,45)"
+--segment "1500ms,1.0,0,0,0->1.0,-180,30,45"
+
+equivalent with reading aids:
+--segment "1.5s,	1.0,	(0,0,0) -> 1.0, (-180,30,45)"
 
 With two segments, first a 2s slow rotation, then faster 1s one back to the video starting point:
---segment "2000,0.9,(0,0,0)->0.9,(-180,30,45)" --segment "1000,0.9,(-180,30,45)->0.9,(0,0,0)"
+--segment "2s,0.9,(0,0,0)->0.9,(-180,30,45)" --segment "1s,0.9,(-180,30,45)->0.9,(0,0,0)"
 
 Zoom in from afar while rotating:
---segment "3000,0.1,(90,90,0)->0.9,(0,0,0)"
+--segment "3s,0.1,(90,90,0)->0.9,(0,0,0)"
 
 
 '''									)
+
 	parser.add_argument('-d', '--debug', action='store_true', dest='debug',
 						help='debug mode')
-	parser.add_argument('-C', '--overwrite', action='store_true', dest='clobber',
+	parser.add_argument('-nc', '--nocolor', '--nocolour', action='store_true', dest='nocolor',
+						help='disable color output in terminal messages')
+	parser.add_argument('-C', '--overwrite', action='store_true', dest='overwrite',
 						help='overwrite existing images')
 	parser.add_argument('--cli', type=str, metavar='</path/to/kicad-cli>',
 						default='kicad-cli-nightly',
 						help='kicad-cli executable (default: %(default)s)')
-	parser.add_argument('--ffmpeg', type=str, metavar='</path/to/ffmpeg>', default='ffmpeg',
+	parser.add_argument('--ffmpeg', type=str, metavar='</path/to/ffmpeg>',
+						default='ffmpeg',
 						help='ffmpeg executable (default: %(default)s)')
-	parser.add_argument('--fps', type=int, metavar='<integer>', default=30,
+	parser.add_argument('--fps', type=int, metavar='<integer>',
+						default=30,
 						help='video framerate (default: %(default)d)')
-	parser.add_argument('--img_format', type=str, metavar='<jpg|png>', default='png',
-						choices=['jpg', 'png'],
+	parser.add_argument('--img_format', type=str, metavar='jpg|png',
+						default='png', choices=['jpg', 'png'],
 						help='image format of frames (default: %(default)s)')
-	parser.add_argument('-j', '--jobs', type=int, choices=range(1,9),
-						metavar='<integer>', default=8,
+	parser.add_argument('-j', '--jobs', type=int, choices=range(1,9), metavar='<integer>',
+						default=8,
 						help='maximum number of concurrent jobs, [1..8] (default: %(default)d)')
-	parser.add_argument('--tmpdir', type=str, metavar='<directory>', default='.',
+	parser.add_argument('--tmpdir', type=str, metavar='<directory>',
+						default='.',
 						help='tmp file directory (default: %(default)s)')
+
+	kc = parser.add_argument_group('options used when calling kicad-cli[-nightly]')
+	kc.add_argument('--kc-background', dest='kc_background',
+					type=str, metavar='transparent|opaque', default='transparent',
+					choices=['transparent', 'opaque'],
+					help='(default: %(default)s)')
+	kc.add_argument('--kc-quality', dest='kc_quality',
+					type=str, metavar='basic|high|user', default='high',
+					choices=['basic', 'high', 'user'],
+					help='(default: %(default)s)')
+	kc.add_argument('--kc-preset', dest='kc_preset', default='follow_pcb_editor',
+					type=str, metavar='<preset>',
+					help='(default: %(default)s)')
+	kc.add_argument('--kc-floor', action='store_true', dest='kc_floor',
+					help='(default: not used)')
+	kc.add_argument('--no-kc-perspective', dest='kc_perspective', action='store_true',
+					help='do NOT use --perspective (default: %(default)s)')
+	kc.add_argument('--kc-pivot', dest='kc_pivot', default='',
+					type=str, metavar='<pivot>',
+					help='(default: not used)')
+
 	req = parser.add_argument_group('required arguments')
-	req.add_argument('--in', nargs=1, metavar='<file>', dest='pcbfile', required=True,
-						help='.kicad_pcb file')
-	req.add_argument('--out', nargs=1, metavar='<file>', dest='outfile', required=True,
-						help='output video file, e.g. video.mp4')
-	req.add_argument('--res', type=XY_size, metavar='<XxY>', nargs=1, required=True,
-						help='target video resolution, e.g. 640x480')
-	req.add_argument('-s', '--segment', type=str, metavar='<segment specification>',
-						action='append', dest='segments', required=True,
-						help='add video segment, see below for syntax')
+
+	req.add_argument('--in',
+					nargs=1, metavar='<file>', dest='pcbfile', required=True,
+					help='.kicad_pcb file')
+	req.add_argument('--out',
+					nargs=1, metavar='<file>', dest='outfile', required=True,
+					help='output video file, e.g. video.mp4')
+	req.add_argument('--res',
+					type=XY_size, metavar='<XxY>', nargs=1, required=True,
+					help='target video resolution, e.g. 640x480')
+	req.add_argument('-s', '--segment',
+					type=str, metavar='<segm_expr>',
+					action='append', dest='segments', required=True,
+					help='add video segment. More than one --segment can be specified. See below for syntax.')
 
 	args = parser.parse_args()
 
-	glob.clobber		=	args.clobber
+
 	glob.debug_mode		=	args.debug
 	glob.ffmpeg_exe		=	args.ffmpeg
+	glob.img_format		=	args.img_format
+	glob.kc_background	=	args.kc_background
+	glob.kc_floor		=	args.kc_floor
+	glob.kc_perspective	=	not args.kc_perspective
+	glob.kc_pivot		=	args.kc_pivot
+	glob.kc_preset		=	args.kc_preset
+	glob.kc_quality		=	args.kc_quality
 	glob.kicad_cli_exe	=	args.cli
 	glob.max_threads	=	args.jobs
+	glob.nocolor		=	args.nocolor
 	glob.out_file		=	args.outfile[0]
+	glob.overwrite		=	args.overwrite
 	glob.pcb_file		=	args.pcbfile[0]
 	glob.tmp_dir		=	args.tmpdir
 	glob.vid_fps		=	args.fps
 	glob.vid_res		=	args.res
 
 	glob.img_base_name	=	os.path.join(glob.tmp_dir, os.path.basename(glob.pcb_file)) + ".FRAME_"
-	glob.img_suffix		=	"." + args.img_format
+	glob.img_suffix		=	"." + glob.img_format
 	glob.segment_args.extend(args.segments)
 	glob.vid_fpms		=	glob.vid_fps / 1000
+
+	if glob.nocolor:
+		for field in dir(term):
+			if not callable(getattr(term, field)) and not field.startswith("__"):
+				setattr(term, field, "")
 
 	return		# reached iff no illegal arguments
 # /def parseArguments
@@ -450,7 +500,17 @@ if sys.hexversion < 0x03070000:		# bits 31..24: major, bits 23..16: minor
 	err_exit(term.err + "***ERROR*** Python 3.7 or higher required. \n")
 
 
+#_LOG(str(list(vars(term).keys())) + "\n")
+
+
+#for field in dir(term):
+#	if not callable(getattr(term, field)) and not field.startswith("__"):
+#		print(field)
+
 parse_cmdline()				# Returns IFF cmdline args seem mostly ok.
+
+_LOG(term.values + str(glob) + "\n")
+sys.exit(0)
 
 check_existance_infile()	# Returns IFF infile exists.
 
