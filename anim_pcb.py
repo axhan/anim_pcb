@@ -116,18 +116,23 @@ class Globals:
 	proc_list:		list[subprocess.Popen] = field(default_factory=list)
 # /class Globals
 
+
 #***** Utility functions *******************************************************
-def _DBG(dbgTxt) -> None:
+
+def _DBG(msg) -> None:
 	if glob.debug_mode:
-		print(dbgTxt, end = '', flush = True)
+		print(msg, end = '', flush = True)
 	return
-# /def _DBG
+#/def _DBG
 
 
-def _LOG(msg) -> None:
-	print(msg, end = '', flush = True)
+def _LOG(tit, sub=None) -> None:
+	if sub == None:
+		print(tit, end = '', flush = True)
+	else:
+		print(term.title + tit + term.values + sub, end = '', flush = True)
 	return
-# /def _DBG
+#/def _LOG
 
 
 # Visible whitespace - replace space, tab and newline with visible symbols
@@ -136,6 +141,7 @@ def _greySpace(txt: str) -> str:
 	toChars = '\u2423\u21e5\u21b5'
 	return txt.translate(str.maketrans(fromChars, toChars))
 # /def _greySpace
+
 
 #***** Other functions *********************************************************
 def err_exit(msg: str = None) -> None:
@@ -188,7 +194,7 @@ def wait_available_thread_slots(at_least: int = 1) -> bool:
 		ret |= remove_returned()
 
 	return ret
-# /def wait_available_thread_slots
+#/def wait_available_thread_slots
 
 
 def run_thread(cmd: str, args: list) -> None:
@@ -206,23 +212,9 @@ def run_thread(cmd: str, args: list) -> None:
 	except OSError:
 		raise		# Re-raise to function's caller.
 	return
-# /def run_thread
-
-'''
-Nåja, ett ännu bättre koncept än ≁GOTO är COMEFROM.
-
-		...
-		...
-label:	...
-		...
-		...
-		if (cond): COMEFROM label
-		...
-		...
+#/def run_thread
 
 
-
-'''
 def parse_cmdline() -> None:
 	def XY_size(XxY):
 		if len(XxY) >= 3:
@@ -235,10 +227,12 @@ def parse_cmdline() -> None:
 	# /def
 
 	parser = argparse.ArgumentParser(
-		description='Parallellized PCB animation video creation by calling multiple kicad-cli-nightly instances to render the individual frames, then optionally joining the created image files to a video with ffmpeg.',
+		description='Parallellized PCB animation video creation by calling multiple kicad-cli-nightly instances repeatedly to render the individual frames, then optionally joining the created image files to a video with ffmpeg.',
 		allow_abbrev=False,	formatter_class=argparse.RawDescriptionHelpFormatter,
 		epilog='''
 
+
+Rotation and zoom seem usable, pan and pivot are more or less untested.
 
 Multiple --segment args can be used. The resulting video will have them following each other in-order. The "from"-params of the 2nd segment should in that case be equal to the "toward"-params of the 1st, etc for continuous, seamless movement.
 
@@ -255,7 +249,7 @@ segm_expr	::= dur_expr WS from_expr WS "->" WS toward_expr
 from_expr	::= toward_expr
 toward_expr	::= [zoom_expr] [rot_expr] [pan_expr] [piv_expr]
 dur_expr	::= floatnumber ("s" | "ms")
-zoom_expr	::= "z" "(" floatnumber ")"
+zoom_expr	::= "z" "(" [WS] floatnumber [WS] ")"
 rot_expr	::= "rot" "(" [WS] rotax [WS] "," [WS] rotay [WS] "," [WS] rotaz [WS] ")"
 pan_expr	::= "pan" "(" [WS] panax [WS] "," [WS] panay [WS] "," [WS] panaz [WS] ")"
 piv_expr	::= "piv" "(" [WS] pivx [WS] "," [WS] pivy [WS] "," [WS] pivz [WS] ")"
@@ -264,7 +258,9 @@ panax..z	::= floatnumber
 pivx..z		::= floatnumber
 WS			::= (SP | TAB | NEWLINE)*
 
-Animation is made by transitioning, using interpolation, in carefully calculated steps, the positional parameters from (from_expr) to (toward_expr) frame-by-frame. It's questionable if pivot animation is useful, but it can be, in the interest of flexibility.
+Animation is made by interpolating the positional parameters between (from_expr) and (toward_expr) in the intermediate frames.
+
+It's questionable if pivot animation is useful, but it can be, in the interest of flexibility.
 
 (duration) is the target playing time of the animation segment. The animation segment will consist of (fps * duration in s) frames.
 
@@ -282,7 +278,7 @@ Animation is made by transitioning, using interpolation, in carefully calculated
 equivalent generously fertilized with whitespace:
 --segment "1.5s 	rot(0, 0, 0)  ->    rot(-180, 30,   45)"
 
-With two segments, first a 2s slow rotation, then faster 1s one back to the video starting point:
+With two segments, first a 2s slow rotation, then a faster 1s one backwards to the video starting point:
 --segment "2s	z(0.9)	rot(0,0,0)		 ->	z(0.9) rot(-180,30,45)" \
 --segment "1s	z(0.9)	rot(-180,30,45)  ->	z(0.9) rot(0,0,0)"
 
@@ -583,13 +579,11 @@ def segments_from_args() -> None:
 		term.values + str(glob.vid_frames) + term.title + " frames) @ " + term.values +
 		str(glob.vid_fps) + term.title + " FPS\n")
 
-#	err_exit(term.title + "BREAK" + "\n" )
 	return	# reached iff no errors
-# /def parseSegments
+#/def segments_from_args
 
 
 def render_frames() -> None:
-	# TODO	Make some of these configurable with cmdline args.
 	cli_static_args	= ["pcb", "render"]
 
 	frame_index = 0
@@ -621,9 +615,6 @@ def render_frames() -> None:
 				skip = False
 			# /if
 
-
-# -o tmp/img0001.jpg  ../../universellt_pcb/universellt_pcb.kicad_pcb
-			#.............
 			arglist = list()
 			arglist.extend(cli_static_args)
 			arglist.append("--rotate")
@@ -652,19 +643,11 @@ def render_frames() -> None:
 			arglist.append("--quality")
 			arglist.append(glob.kc_quality)
 
-#	kc_background:	str			=	None
-#	kc_floor:		bool		=	None
-#	kc_perspective:	bool		=	None
-#	kc_preset:		str			=	None
-#	kc_quality:		str			=	None
-
-
 			arglist.append("-o")
 			arglist.append(f"{frame_filename}")
 			arglist.append(glob.pcb_file)
 			_DBG(term.values + str(arglist))
 			if not skip:
-#				pass
 				if not glob.dry_run:
 					run_thread(glob.kicad_cli_exe, arglist)
 
@@ -685,23 +668,30 @@ def render_frames() -> None:
 
 
 def create_video_file() -> None:
-	# TODO	Make some of these configurable with cmdline args.
+	# TODO	Make some of the ffmpeg options configurable with cmdline args.
 	ff_static_args_1 = ["-y", "-start_number", "0"]
 	ff_static_args_2 = ["-c:v", "libx264", "-preset", "slow", "-crf", "22"]
 
-	arglist = list()
-	arglist.extend(ff_static_args_1)
-	arglist.append("-framerate")
-	arglist.append(f"{glob.vid_fps}")
-	arglist.append("-i")
-	arglist.append(glob.img_base_name + "%06d" + glob.img_suffix)
-	arglist.extend(ff_static_args_2)
-	arglist.append("-r")
-	arglist.append(f"{glob.vid_fps}")
-	arglist.append(glob.out_file)
+	if glob.out_file != None:
+		_LOG(term.title + "\nCreating video file... ")
 
-	if not glob.dry_run:
-		run_thread(glob.ffmpeg_exe, arglist)
+		arglist = list()
+		arglist.extend(ff_static_args_1)
+		arglist.append("-framerate")
+		arglist.append(f"{glob.vid_fps}")
+		arglist.append("-i")
+		arglist.append(glob.img_base_name + "%06d" + glob.img_suffix)
+		arglist.append("-frames:v")
+		arglist.append(f"{glob.vid_frames}")
+		arglist.extend(ff_static_args_2)
+		arglist.append("-r")
+		arglist.append(f"{glob.vid_fps}")
+		arglist.append(glob.out_file)
+
+		_DBG(term.values + str(arglist))
+
+		if not glob.dry_run:
+			run_thread(glob.ffmpeg_exe, arglist)
 	return
 # /def create_video_file
 #***** Main ********************************************************************
@@ -738,16 +728,14 @@ if wait_available_thread_slots(glob.max_threads):
 	err_exit(term.err + "***ERROR*** at least one of the " + glob.kicad_cli_exe +
 			" calls returned an error\n" + term.normal)
 
-if glob.out_file != None:
-	_LOG(term.title + "\nCreating video file... ")
-	create_video_file()
+create_video_file()
 
 if wait_available_thread_slots(glob.max_threads):
 	err_exit(term.err + "***ERROR*** " + glob.ffmpeg_exe +
 			" call returned error\n" + term.normal)
 
 
-_LOG(" done\n")
+_LOG(term.title + "\nDone.\n")
 
 sys.exit(0)
 
