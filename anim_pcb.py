@@ -34,20 +34,46 @@ class term:
 # contain all data necessary for 3D transition between frames within that segment.
 @dataclass(eq=False)
 class SegmentSpec:
-	dur:		int		=	-1
-	frames:		int		=	-1
-	fr_zoom:	float	=	-1
-	fr_ax:		float	=	-1
-	fr_ay:		float	=	-1
-	fr_az:		float	=	-1
-	to_zoom:	float	=	-1
-	to_ax:		float	=	-1
-	to_ay:		float	=	-1
-	to_az:		float	=	-1
-	step_zoom:	float	=	-1
-	step_ax:	float	=	-1
-	step_ay:	float	=	-1
-	step_az:	float	=	-1
+	dur:		float	=	-1	# in s
+	frames:		int		=	-1	# rounded up to nearest integer
+
+	incl_zoom:	bool	=	 False
+	incl_rot:	bool	=	 False
+	incl_pan:	bool	=	 False
+	incl_piv:	bool	=	 False
+
+	fr_zoom:	float	=	1.0
+	fr_rotax:	float	=	0
+	fr_rotay:	float	=	0
+	fr_rotaz:	float	=	0
+	fr_panax:	float	=	0
+	fr_panay:	float	=	0
+	fr_panaz:	float	=	0
+	fr_pivx:	float	=	0
+	fr_pivy:	float	=	0
+	fr_pivz:	float	=	0
+
+	to_zoom:	float	=	1.0
+	to_rotax:	float	=	0
+	to_rotay:	float	=	0
+	to_rotaz:	float	=	0
+	to_panax:	float	=	0
+	to_panay:	float	=	0
+	to_panaz:	float	=	0
+	to_pivx:	float	=	0
+	to_pivy:	float	=	0
+	to_pivz:	float	=	0
+
+	d_zoom:		float	=	0
+	d_rotax:	float	=	0
+	d_rotay:	float	=	0
+	d_rotaz:	float	=	0
+	d_panax:	float	=	0
+	d_panay:	float	=	0
+	d_panaz:	float	=	0
+	d_pivx:		float	=	0
+	d_pivy:		float	=	0
+	d_pivz:		float	=	0
 # /class SegmentSpec
 
 
@@ -62,13 +88,13 @@ class Globals:
 	kc_background:	str			=	None
 	kc_floor:		bool		=	None
 	kc_perspective:	bool		=	None
-	kc_pivot:		str			=	None
 	kc_preset:		str			=	None
 	kc_quality:		str			=	None
 	kicad_cli_exe:	str			=	None
 	nocolor:		bool		=	None
 	overwrite:		bool		=	None
 	debug_mode:		bool		=	None
+	dry_run:		bool		=	None
 	vid_fps:		int			=	None
 	segment_args:	list[str]	=	field(default_factory=list)
 	max_threads:	int			=	None
@@ -81,9 +107,10 @@ class Globals:
 	segments:		list[SegmentSpec]	=	field(default_factory=list)
 	vid_dx:			int					=	-1	# in pixels
 	vid_dy:			int					=	-1
-	vid_fpms:		float				=	-1
-	vid_frames:		int					=	0	# frames/ms
-	vid_ms:			int					=	0	# in ms
+	vid_fpms:		float				=	-1	# frames/ms
+	vid_frames:		int					=	0
+	vid_ms:			float				=	0	# in ms
+	vid_s:			float				=	0	# in s
 
 	# List of running processes
 	proc_list:		list[subprocess.Popen] = field(default_factory=list)
@@ -181,8 +208,21 @@ def run_thread(cmd: str, args: list) -> None:
 	return
 # /def run_thread
 
+'''
+Nåja, ett ännu bättre koncept än ≁GOTO är COMEFROM.
+
+		...
+		...
+label:	...
+		...
+		...
+		if (cond): COMEFROM label
+		...
+		...
 
 
+
+'''
 def parse_cmdline() -> None:
 	def XY_size(XxY):
 		if len(XxY) >= 3:
@@ -195,51 +235,59 @@ def parse_cmdline() -> None:
 	# /def
 
 	parser = argparse.ArgumentParser(
-		description='Parallellized PCB animation video creation by calling multiple kicad-cli-nightly instances to make the individual frames, then joining them to a video with ffmpeg.',
+		description='Parallellized PCB animation video creation by calling multiple kicad-cli-nightly instances to render the individual frames, then optionally joining the created image files to a video with ffmpeg.',
 		allow_abbrev=False,	formatter_class=argparse.RawDescriptionHelpFormatter,
 		epilog='''
 
 
-******************************************************************************
-Animation segment expression segm_expr (as expected by the --segment arg):
+Multiple --segment args can be used. The resulting video will have them following each other in-order. The "from"-params of the 2nd segment should in that case be equal to the "toward"-params of the 1st, etc for continuous, seamless movement.
 
-segm_expr	::= duration ("s" | "ms") SEP from_expr TRFORM_SEP toward_expr
+############### --segment "segm_expr" indepth ###############
+
+Whitespace separating parts can be any length.
+
+"1.3s	z(0.9) rot(1, 2, 3) pan(0,0,0) piv(0,0,0) -> \
+		z(0.9) rot(4, 5, 6) pan(0,0,0) piv(0,0,0)"
+
+Semiformal syntax description of segm_expr:
+
+segm_expr	::= dur_expr WS from_expr WS "->" WS toward_expr
 from_expr	::= toward_expr
-toward_expr	::= zoom SEP rot_expr [SEP pan_expr]
-rot_expr	::= rotax SEP rotay SEP rotaz
-pan_expr	::= panax SEP panay SEP panaz
-duration	::= floatnumber
-rotax		::= floatnumber
-rotay		::= floatnumber
-rotaz		::= floatnumber
-panax		::= floatnumber
-panay		::= floatnumber
-panaz		::= floatnumber
-TRFORM_SEP	::= [ign_chars] "->" [ign_chars]
-SEP			::= [ign_chars] "," [ign_chars]
-ign_chars	::= (SP | TAB | NEWLINE | "(" | ")" | "[" | "]" | "{" | "}")*
+toward_expr	::= [zoom_expr] [rot_expr] [pan_expr] [piv_expr]
+dur_expr	::= floatnumber ("s" | "ms")
+zoom_expr	::= "z" "(" floatnumber ")"
+rot_expr	::= "rot" "(" [WS] rotax [WS] "," [WS] rotay [WS] "," [WS] rotaz [WS] ")"
+pan_expr	::= "pan" "(" [WS] panax [WS] "," [WS] panay [WS] "," [WS] panaz [WS] ")"
+piv_expr	::= "piv" "(" [WS] pivx [WS] "," [WS] pivy [WS] "," [WS] pivz [WS] ")"
+rotax..z	::= floatnumber
+panax..z	::= floatnumber
+pivx..z		::= floatnumber
+WS			::= (SP | TAB | NEWLINE)*
 
-Whitespace and "()[]{}" are stripped before parsing the --segment strings, so these can be used to e.g. group the parameters, as reading aids for ease-of-overview.
+Animation is made by transitioning, using interpolation, in carefully calculated steps, the positional parameters from (from_expr) to (toward_expr) frame-by-frame. It's questionable if pivot animation is useful, but it can be, in the interest of flexibility.
 
-(rotax, rotay, rotaz) define the PCBs rotation around the x,y,z-axii.
-(panax, panay, panaz), if included, define the viewpoint's panning. Not really tested extensivatall.
 (duration) is the target playing time of the animation segment. The animation segment will consist of (fps * duration in s) frames.
-(zoom) is the camera zoomin.
-kicad_cli seems to dislike angles outside the [-360..360] range, so keep within. I should probably do a remainder division thing in the future.
 
-Multiple --segment args can be used. The resulting video will have them following each other in-order. The "from"-params of the 2nd segment should be equal to the "toward"-params of the 1st, etc for continuous, seamless rotation.
+(zoom) is the camera zoomin. If absent, 1.0 is used.
 
-Examples:
---segment "1500ms,1.0,0,0,0->1.0,-180,30,45"
+(rotax, rotay, rotaz) define the PCBs rotation around the x,y,z-axii. If absent, (0,0,0) are used. kicad-cli-nightly seems to dislike angles outside the [-360..360] range, so don't use values outside this. TODO remainder division/normalize/direction arithmetic.
 
-equivalent with reading aids:
---segment "1.5s,	1.0,	(0,0,0) -> 1.0, (-180,30,45)"
+(panax, panay, panaz) define, if included, the viewpoint's panning.
+
+(pivx, pivy, pivz) define, if included, the rotation pivot of the PCB in centimeters relative to its center.
+
+############### Examples of segment expressions ###############
+--segment "1500ms rot(0,0,0) -> rot(-180,30,45)"
+
+equivalent generously fertilized with whitespace:
+--segment "1.5s 	rot(0, 0, 0)  ->    rot(-180, 30,   45)"
 
 With two segments, first a 2s slow rotation, then faster 1s one back to the video starting point:
---segment "2s,0.9,(0,0,0)->0.9,(-180,30,45)" --segment "1s,0.9,(-180,30,45)->0.9,(0,0,0)"
+--segment "2s	z(0.9)	rot(0,0,0)		 ->	z(0.9) rot(-180,30,45)" \
+--segment "1s	z(0.9)	rot(-180,30,45)  ->	z(0.9) rot(0,0,0)"
 
 Zoom in from afar while rotating:
---segment "3s,0.1,(90,90,0)->0.9,(0,0,0)"
+--segment "3s z(0.1) rot(90,90,0) -> z(0.9) rot(0,0,0)"
 
 
 '''									)
@@ -253,11 +301,15 @@ Zoom in from afar while rotating:
 	parser.add_argument('--cli', type=str, metavar='</path/to/kicad-cli>',
 						default='kicad-cli-nightly',
 						help='kicad-cli executable (default: %(default)s)')
+
+	parser.add_argument('--dry-run', action='store_true', dest='dry_run',
+						help='go through all motions except modifying any files')
+
 	parser.add_argument('--ffmpeg', type=str, metavar='</path/to/ffmpeg>',
 						default='ffmpeg',
 						help='ffmpeg executable (default: %(default)s)')
 	parser.add_argument('--fps', type=int, metavar='<integer>',
-						default=30,
+						default=30, dest='fps',
 						help='video framerate (default: %(default)d)')
 	parser.add_argument('--img_format', type=str, metavar='jpg|png',
 						default='png', choices=['jpg', 'png'],
@@ -265,6 +317,10 @@ Zoom in from afar while rotating:
 	parser.add_argument('-j', '--jobs', type=int, choices=range(1,9), metavar='<integer>',
 						default=8,
 						help='maximum number of concurrent jobs, [1..8] (default: %(default)d)')
+
+	parser.add_argument('--out', type=str, metavar='<file>', dest='outfile', default=None,
+						help='output video file, e.g. "video.mp4". If absent, the frames will be rendered but no video created')
+
 	parser.add_argument('--tmpdir', type=str, metavar='<directory>',
 						default='.',
 						help='tmp file directory (default: %(default)s)')
@@ -285,18 +341,12 @@ Zoom in from afar while rotating:
 					help='(default: not used)')
 	kc.add_argument('--no-kc-perspective', dest='kc_perspective', action='store_true',
 					help='do NOT use --perspective (default: %(default)s)')
-	kc.add_argument('--kc-pivot', dest='kc_pivot', default='',
-					type=str, metavar='<pivot>',
-					help='(default: not used)')
 
 	req = parser.add_argument_group('required arguments')
 
 	req.add_argument('--in',
 					nargs=1, metavar='<file>', dest='pcbfile', required=True,
 					help='.kicad_pcb file')
-	req.add_argument('--out',
-					nargs=1, metavar='<file>', dest='outfile', required=True,
-					help='output video file, e.g. video.mp4')
 	req.add_argument('--res',
 					type=XY_size, metavar='<XxY>', nargs=1, required=True,
 					help='target video resolution, e.g. 640x480')
@@ -309,18 +359,18 @@ Zoom in from afar while rotating:
 
 
 	glob.debug_mode		=	args.debug
+	glob.dry_run		=	args.dry_run
 	glob.ffmpeg_exe		=	args.ffmpeg
 	glob.img_format		=	args.img_format
 	glob.kc_background	=	args.kc_background
 	glob.kc_floor		=	args.kc_floor
 	glob.kc_perspective	=	not args.kc_perspective
-	glob.kc_pivot		=	args.kc_pivot
 	glob.kc_preset		=	args.kc_preset
 	glob.kc_quality		=	args.kc_quality
 	glob.kicad_cli_exe	=	args.cli
 	glob.max_threads	=	args.jobs
 	glob.nocolor		=	args.nocolor
-	glob.out_file		=	args.outfile[0]
+	glob.out_file		=	args.outfile
 	glob.overwrite		=	args.overwrite
 	glob.pcb_file		=	args.pcbfile[0]
 	glob.tmp_dir		=	args.tmpdir
@@ -343,82 +393,212 @@ Zoom in from afar while rotating:
 # 2000 0.8 (0,0,0) 0.9 (30,40,50)
 
 def segments_from_args() -> None:
+
+	def triplex(s, seg_s) -> (float, float, float):
+		tmp_lst = s.split(",")
+		if len(tmp_lst) != 3:
+			SYN_ERR(seg_s)
+		try:
+			x = float(tmp_lst[0])
+			y = float(tmp_lst[1])
+			z = float(tmp_lst[2])
+		except Exception as e:
+			SYN_ERR(str(e))
+		return (x, y, z)
+	#/def triplex
+
+	def SYN_ERR(s) -> None:
+		err_exit(term.err + "***ERROR*** Syntax: "+ term.errdata + s + "\n" + term.normal)
+		return # Never reached
+	#/def SYN_ERR
+
+
 	for i in range(len(glob.segment_args)):
-		_LOG(term.title + "Segment " + str(i) + ": ")
-		arg = glob.segment_args[i]
-		arg_words = arg.split()
-		if len(arg_words) != 5:
-				err_exit(term.err + "***ERROR*** Syntax: " + term.errdata + arg + "\n")
-		tuple1_word = arg_words[2].removeprefix("(").removesuffix(")")
-		tuple2_word = arg_words[4].removeprefix("(").removesuffix(")")
-		tuple1_vals = tuple1_word.split(",")
-		tuple2_vals = tuple2_word.split(",")
-		if (len(tuple1_vals) != 3) or (len(tuple2_vals) != 3):
-				err_exit(term.err + "***ERROR*** Syntax: " + term.errdata + arg + "\n")
-#		if len(tuple2_vals) != 3:
-#				print(term.err + "***ERROR*** Syntax: " + arg + "\n")
-#				sys.exit(0)
+		_LOG(term.title +"Segment " + term.values + str(i) + term.title + ": \n")
 
 		try:
-			seg = SegmentSpec(
-						dur		=	int(arg_words[0]),
-						frames	=	int(float(int(arg_words[0])) * glob.vid_fpms),
-						fr_zoom	=	float(arg_words[1]),
-						to_zoom	=	float(arg_words[3]),
-						fr_ax	=	float(tuple1_vals[0]),
-						fr_ay	=	float(tuple1_vals[1]),
-						fr_az	=	float(tuple1_vals[2]),
-						to_ax	=	float(tuple2_vals[0]),
-						to_ay	=	float(tuple2_vals[1]),
-						to_az	=	float(tuple2_vals[2]),
-				)
+			seg = SegmentSpec()
 		except Exception as e:
-			err_exit(term.err + "***ERROR*** Syntax: " + str(e) + " " + term.errdata +
-					"\"" + arg + "\"\n" + term.normal)
+			err_exit(term.err + "***ERROR*** WTF: " + term.errdata + str(e) + "\n" + term.normal)
 
-		seg.step_ax		= (seg.to_ax - seg.fr_ax) / float(seg.frames)
-		seg.step_ay		= (seg.to_ay - seg.fr_ay) / float(seg.frames)
-		seg.step_az		= (seg.to_az - seg.fr_az) / float(seg.frames)
-		seg.step_zoom	= (seg.to_zoom - seg.fr_zoom) / float(seg.frames)
+		tmp_expr = ""
+		tmp = glob.segment_args[i]
+
+		tmp_lst = tmp.split(maxsplit = 1)
+		if len(tmp_lst) < 2:
+			SYN_ERR(glob.segment_args[i])
+		else:
+			if tmp_lst[0].endswith("ms"):
+				div = 1000
+			elif tmp_lst[0].endswith("s"):
+				div = 1
+			else:
+				SYN_ERR(glob.segment_args[i])
+			dur_s = tmp_lst[0].rstrip("sm")
+			rest_s = tmp_lst[1]
+
+#		_LOG(term.title + "dur_s, rest_s: " + term.values + "\"" + dur_s + "\", \"" +
+#				rest_s + "\"\n")
+		try:
+			seg.dur = float(dur_s) / div
+		except Exception as e:
+			SYN_ERR(str(e))
+
+#		_LOG(term.title + "dur = " + term.values + str(seg.dur) + "s\n")
+
+		if rest_s.count("->") != 1:
+			SYN_ERR(rest_s)
+		else:
+			(tmp_l_str , tmp_slask, tmp_r_str) = rest_s.partition("->")
+
+#		expr_l_lst,	expr_r_lst	=	[], 					[]
+		tmp_l_lst,	tmp_r_lst	=	tmp_l_str.split(")"),	tmp_r_str.split(")")
+#		_LOG(term.title + "tmp_l_lst :" + term.values + str(tmp_l_lst) + "\n")
+#		_LOG(term.title + "tmp_r_lst :" + term.values + str(tmp_r_lst) + "\n")
+
+		l_incl_zoom = l_incl_rot = l_incl_pan = l_incl_piv = False
+
+
+		for s in tmp_l_lst:
+			snws = ''.join(s.split())
+			if len(snws) > 0:
+				if snws.startswith("z("):
+					l_incl_zoom = True
+					try:
+						seg.fr_zoom = float(snws[2:])
+					except Exception as e:
+						SYN_ERR(str(e))
+				elif snws.startswith("rot("):
+					l_incl_rot = True
+					(seg.fr_rotax,seg.fr_rotay,seg.fr_rotaz) = triplex(snws[4:], snws)
+				elif snws.startswith("pan("):
+					l_incl_pan = True
+					(seg.fr_panax,seg.fr_panay,seg.fr_panaz) = triplex(snws[4:], snws)
+				elif snws.startswith("piv("):
+					l_incl_piv = True
+					(seg.fr_pivx,seg.fr_pivy,seg.fr_pivz) = triplex(snws[4:], snws)
+				else:
+					SYN_ERR(glob.segment_args[i])
+#				expr_l_lst.append(snws)
+		for s in tmp_r_lst:
+			snws = ''.join(s.split())
+			if len(snws) > 0:
+				if snws.startswith("z("):
+					seg.incl_zoom = True
+					try:
+						seg.to_zoom = float(snws[2:])
+					except Exception as e:
+						SYN_ERR(str(e))
+				elif snws.startswith("rot("):
+					seg.incl_rot = True
+					(seg.to_rotax,seg.to_rotay,seg.to_rotaz) = triplex(snws[4:], snws)
+				elif snws.startswith("pan("):
+					seg.incl_pan = True
+					(seg.to_panax,seg.to_panay,seg.to_panaz) = triplex(snws[4:], snws)
+				elif snws.startswith("piv("):
+					seg.incl_piv = True
+					(seg.to_pivx,seg.to_pivy,seg.to_pivz) = triplex(snws[4:], snws)
+				else:
+					SYN_ERR(glob.segment_args[i])
+#				expr_r_lst.append(snws)
+#		_LOG(term.title + "expr_l_lst :" + term.values + str(tmp_l_lst) + "\n")
+#		_LOG(term.title + "expr_r_lst :" + term.values + str(tmp_r_lst) + "\n")
+# x rot pan piv
+#		_LOG(str(glob.vid_fps) + "\n")
+
+
+		if ((seg.incl_zoom != l_incl_zoom) or (seg.incl_rot != l_incl_rot)
+			or (seg.incl_pan != l_incl_pan) or (seg.incl_piv != l_incl_piv)):
+			err_exit(term.err + "***ERROR*** Syntax: Terms from/toward mismatch\n" + term.normal)
+
+		seg.frames = math.ceil(seg.dur * float(glob.vid_fps))
+
+		# Interpolation step values
+		seg.d_zoom	= (seg.to_zoom - seg.fr_zoom) / seg.frames
+		seg.d_rotax	= (seg.to_rotax - seg.fr_rotax) / seg.frames
+		seg.d_rotay	= (seg.to_rotay - seg.fr_rotay) / seg.frames
+		seg.d_rotaz	= (seg.to_rotaz - seg.fr_rotaz) / seg.frames
+		seg.d_panax	= (seg.to_panax - seg.fr_panax) / seg.frames
+		seg.d_panay	= (seg.to_panay - seg.fr_panay) / seg.frames
+		seg.d_panaz	= (seg.to_panaz - seg.fr_panaz) / seg.frames
+		seg.d_pivx	= (seg.to_pivx - seg.fr_pivx) / seg.frames
+		seg.d_pivy	= (seg.to_pivy - seg.fr_pivy) / seg.frames
+		seg.d_pivz	= (seg.to_pivz - seg.fr_pivz) / seg.frames
+
+#		_LOG(term.values + str(seg) + "\n" + term.normal)
+
+
 		glob.segments.append(seg);
-		glob.vid_ms += seg.dur
-		glob.vid_frames += int(float(seg.dur) * glob.vid_fpms)
+		glob.vid_ms += seg.dur * 1000
+		glob.vid_s += seg.dur
+		glob.vid_frames += seg.frames
 
-		_LOG(term.values +
-				"\tdur="					+	f"{seg.dur}"			+
-				", frames="					+	f"{seg.frames}"			+
-				"\n\t\tstart\t(fr_zoom≈"	+	f"{seg.fr_zoom:.2f}"	+
-				", fr_ax="					+	f"{seg.fr_ax:.2f}"		+
-				", fr_ay≈"					+	f"{seg.fr_ay:.2f}"		+
-				", fr_az≈"					+	f"{seg.fr_az:.2f}"		+
-				")\n\t\tend\t(to_zoom≈"		+	f"{seg.to_zoom:.2f}"	+
-				", to_ax≈"					+	f"{seg.to_ax:.2f}"		+
-				", to_ay≈"					+	f"{seg.to_ay:.2f}"		+
-				", to_az≈"					+	f"{seg.to_az:.2f}"		+
-				")\n\t\tsteps\t(step_zoom≈"	+	f"{seg.step_zoom:.2f}"	+
-				", step_ax≈"				+	f"{seg.step_ax:.2f}"	+
-				", step_ay≈"				+	f"{seg.step_ay:.2f}"	+
-				", step_az≈"				+	f"{seg.step_az:.2f}" 	+	")"	+
-				term.normal + "\n")
+		_LOG(term.title + "    duration " + term.values)
+		_LOG(f"{seg.dur:.3f}" + term.title + "s (" + term.values)
+		_LOG(f"{seg.frames}" + term.title + " frames)\n")
 
-	_LOG(term.title + "Video: " + term.values + str(glob.vid_frames) + " frames total, duration "
-			+ str(glob.vid_ms) + "ms @ " + str(glob.vid_fps) + " FPS" + term.normal + "\n")
-	return
+		if seg.incl_zoom:
+			_LOG(term.title + "    zooming  " + term.values)
+			_LOG(f"{seg.fr_zoom:.2f}" + term.title + " to " + term.values)
+			_LOG(f"{seg.to_zoom:.2f}" + term.title + " step ≈ " + term.values)
+			_LOG(f"{seg.d_zoom:.3f}" + "\n")
+
+		if seg.incl_rot:
+			_LOG(term.title + "    rotation (" + term.values)
+			_LOG(f"{seg.fr_rotax:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.fr_rotay:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.fr_rotaz:.2f}" + term.title + ") to (" + term.values)
+			_LOG(f"{seg.to_rotax:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.to_rotay:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.to_rotaz:.2f}" + term.title + ") step ≈(" + term.values)
+			_LOG(f"{seg.d_rotax:.4f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.d_rotay:.4f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.d_rotaz:.4f}" + term.title + ")\n")
+
+		if seg.incl_pan:
+			_LOG(term.title + "    panning  (" + term.values)
+			_LOG(f"{seg.fr_panax:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.fr_panay:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.fr_panaz:.2f}" + term.title + ") to (" + term.values)
+			_LOG(f"{seg.to_panax:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.to_panay:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.to_panaz:.2f}" + term.title + ") step ≈(" + term.values)
+			_LOG(f"{seg.d_panax:.4f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.d_panay:.4f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.d_panaz:.4f}" + term.title + ")\n")
+
+		if seg.incl_piv:
+			_LOG(term.title + "    pivoting (" + term.values)
+			_LOG(f"{seg.fr_pivx:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.fr_pivy:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.fr_pivz:.2f}" + term.title + ") to (" + term.values)
+			_LOG(f"{seg.to_pivx:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.to_pivy:.2f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.to_pivz:.2f}" + term.title + ") step ≈(" + term.values)
+			_LOG(f"{seg.d_pivx:.4f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.d_pivy:.4f}" + term.title + ", " + term.values)
+			_LOG(f"{seg.d_pivz:.4f}" + term.title + ")\n")
+
+	_LOG(term.title + "Video: " + term.values + str(glob.vid_ms) + term.title + "ms (" +
+		term.values + str(glob.vid_frames) + term.title + " frames) @ " + term.values +
+		str(glob.vid_fps) + term.title + " FPS\n")
+
+#	err_exit(term.title + "BREAK" + "\n" )
+	return	# reached iff no errors
 # /def parseSegments
 
 
 def render_frames() -> None:
 	# TODO	Make some of these configurable with cmdline args.
-	cli_static_args	= ["pcb", "render", "--preset", "follow_pcb_editor", "--quality", "high",
-						"--floor", "--perspective", "--background", "transparent"]
+	cli_static_args	= ["pcb", "render"]
 
 	frame_index = 0
 	for seg_index in range(len(glob.segments)):
 		seg = glob.segments[seg_index]
-		ax = seg.fr_ax
-		ay = seg.fr_ay
-		az = seg.fr_az
 		zoom = seg.fr_zoom
+		rotax, rotay, rotaz = seg.fr_rotax, seg.fr_rotay, seg.fr_rotaz
+		panax, panay, panaz = seg.fr_panax, seg.fr_panay, seg.fr_panaz
+		pivx, pivy, pivz = seg.fr_pivx, seg.fr_pivy, seg.fr_pivz
 
 		for interseg_frame_index in range(seg.frames):
 			wait_available_thread_slots(1)
@@ -426,11 +606,11 @@ def render_frames() -> None:
 			frame_filename = glob.img_base_name + f"{frame_index:06d}" + glob.img_suffix
 
 			_LOG(term.title + "\nSegment " + term.values + f"{seg_index:3d}" + term.title +
-					" frame " + term.values + f"{frame_index:4d}" + term.title + ", \"..." +
-					term.values + f"{frame_index:06d}" + glob.img_suffix + term.title + "\" ... ")
+					" frame " + term.values + f"{frame_index:4d}" + term.title + ", \"" +
+					term.values + f"{frame_filename}" + term.title + "\" ... ")
 
 			if os.path.exists(frame_filename):
-				if not glob.clobber:
+				if not glob.overwrite:
 					_LOG("skipped ")
 					skip = True
 				else:
@@ -447,25 +627,58 @@ def render_frames() -> None:
 			arglist = list()
 			arglist.extend(cli_static_args)
 			arglist.append("--rotate")
-			arglist.append(f"{ax:.2f},{ay:.2f},{az:.2f}")
+			arglist.append(f"{rotax:.2f},{rotay:.2f},{rotaz:.2f}")
 			arglist.append("--zoom")
 			arglist.append(f"{zoom:.3f}")
-			arglist.append("-w")
+			if seg.incl_pan:
+				arglist.append("--pan")
+				arglist.append(f"{panax:.2f},{panay:.2f},{panaz:.2f}")
+			if seg.incl_piv:
+				arglist.append("--pivot")
+				arglist.append(f"{pivx:.2f},{pivy:.2f},{pivz:.2f}")
+			arglist.append("--width")
 			arglist.append(f"{glob.vid_dx}")
-			arglist.append("-h")
+			arglist.append("--height")
 			arglist.append(f"{glob.vid_dy}")
+
+			arglist.append("--background")
+			arglist.append(glob.kc_background)
+			if glob.kc_floor:
+				arglist.append("--floor")
+			if glob.kc_perspective:
+				arglist.append("--perspective")
+			arglist.append("--preset")
+			arglist.append(glob.kc_preset)
+			arglist.append("--quality")
+			arglist.append(glob.kc_quality)
+
+#	kc_background:	str			=	None
+#	kc_floor:		bool		=	None
+#	kc_perspective:	bool		=	None
+#	kc_preset:		str			=	None
+#	kc_quality:		str			=	None
+
+
 			arglist.append("-o")
 			arglist.append(f"{frame_filename}")
 			arglist.append(glob.pcb_file)
 			_DBG(term.values + str(arglist))
 			if not skip:
 #				pass
-				run_thread(glob.kicad_cli_exe, arglist)
+				if not glob.dry_run:
+					run_thread(glob.kicad_cli_exe, arglist)
 
-			ax += seg.step_ax
-			ay += seg.step_ay
-			az += seg.step_az
-			zoom += seg.step_zoom
+			zoom += seg.d_zoom
+			rotax += seg.d_rotax
+			rotay += seg.d_rotay
+			rotaz += seg.d_rotaz
+			panax += seg.d_panax
+			panay += seg.d_panay
+			panaz += seg.d_panaz
+			pivx += seg.d_pivx
+			pivy += seg.d_pivy
+			pivz += seg.d_pivz
+
 			frame_index += 1
 	_LOG("\n")
 	return
@@ -487,7 +700,8 @@ def create_video_file() -> None:
 	arglist.append(f"{glob.vid_fps}")
 	arglist.append(glob.out_file)
 
-	run_thread(glob.ffmpeg_exe, arglist)
+	if not glob.dry_run:
+		run_thread(glob.ffmpeg_exe, arglist)
 	return
 # /def create_video_file
 #***** Main ********************************************************************
@@ -509,10 +723,10 @@ if sys.hexversion < 0x03070000:		# bits 31..24: major, bits 23..16: minor
 
 parse_cmdline()				# Returns IFF cmdline args seem mostly ok.
 
-_LOG(term.values + str(glob) + "\n")
-sys.exit(0)
+#_LOG(term.values + str(glob) + "\n")
+#sys.exit(0)
 
-check_existance_infile()	# Returns IFF infile exists.
+#check_existance_infile()	# Returns IFF infile exists.
 
 segments_from_args()		# Returns IFF all --segment specs check out syntactically ok.
 
@@ -524,8 +738,9 @@ if wait_available_thread_slots(glob.max_threads):
 	err_exit(term.err + "***ERROR*** at least one of the " + glob.kicad_cli_exe +
 			" calls returned an error\n" + term.normal)
 
-_LOG(term.title + "\nCreating video file... ")
-create_video_file()
+if glob.out_file != None:
+	_LOG(term.title + "\nCreating video file... ")
+	create_video_file()
 
 if wait_available_thread_slots(glob.max_threads):
 	err_exit(term.err + "***ERROR*** " + glob.ffmpeg_exe +
