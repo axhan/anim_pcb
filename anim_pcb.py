@@ -617,16 +617,16 @@ def render_frames() -> None:
 
 			arglist = list()
 			arglist.extend(cli_static_args)
-			arglist.append("--rotate")
-			arglist.append(f"{rotax:.2f},{rotay:.2f},{rotaz:.2f}")
 			arglist.append("--zoom")
 			arglist.append(f"{zoom:.3f}")
 			if seg.incl_pan:
 				arglist.append("--pan")
-				arglist.append(f"{panax:.2f},{panay:.2f},{panaz:.2f}")
+				arglist.append(f"'{panax:.2f},{panay:.2f},{panaz:.2f}'")
 			if seg.incl_piv:
 				arglist.append("--pivot")
-				arglist.append(f"{pivx:.2f},{pivy:.2f},{pivz:.2f}")
+				arglist.append(f"'{pivx:.2f},{pivy:.2f},{pivz:.2f}'")
+			arglist.append("--rotate")
+			arglist.append(f"'{rotax:.2f},{rotay:.2f},{rotaz:.2f}'")
 			arglist.append("--width")
 			arglist.append(f"{glob.vid_dx}")
 			arglist.append("--height")
@@ -643,9 +643,9 @@ def render_frames() -> None:
 			arglist.append("--quality")
 			arglist.append(glob.kc_quality)
 
-			arglist.append("-o")
+			arglist.append("--output")
 			arglist.append(f"{frame_filename}")
-			arglist.append(glob.pcb_file)
+			arglist.append(f"{glob.pcb_file}")
 			_DBG(term.values + str(arglist))
 			if not skip:
 				if not glob.dry_run:
