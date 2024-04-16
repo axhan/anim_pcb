@@ -9,6 +9,8 @@ Also, see `kicad-cli-nightly pcb render --help`
 
 
 ```
+<details>
+<summary>./anim_pcb -h</summary>
 [...]$ ./anim_pcb.py -h
 usage: anim_pcb.py [-h] [-d] [-nc] [-C] [--cli </path/to/kicad-cli>] [--dry-run] [--ffmpeg </path/to/ffmpeg>] [--fps <integer>]
                    [--img_format jpg|png] [-j <integer>] [--out <file>] [--tmpdir <directory>] [--kc-background transparent|opaque]
@@ -100,6 +102,7 @@ With two segments, first a 2s slow rotation, then a faster 1s one backwards to t
 
 Zoom in from afar while rotating:
 --segment "3s z(0.1) rot(90,90,0) -> z(0.9) rot(0,0,0)"
+</details>
 ```
 
 
