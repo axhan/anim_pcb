@@ -715,6 +715,8 @@ def bench_update(frames_done:int = 1) -> None:
 
 def bench_get_min_sec() -> (int, int):
 	return divmod(int(glob.remain_sec), 60)
+
+
 #***** Main ********************************************************************
 
 glob = Globals()
@@ -725,19 +727,9 @@ if sys.hexversion < 0x03070000:		# bits 31..24: major, bits 23..16: minor
 	err_exit(term.err + "***ERROR*** Python 3.7 or higher required. \n")
 
 
-#_LOG(str(list(vars(term).keys())) + "\n")
-
-
-#for field in dir(term):
-#	if not callable(getattr(term, field)) and not field.startswith("__"):
-#		print(field)
-
 parse_cmdline()				# Returns IFF cmdline args seem mostly ok.
 
-#_LOG(term.values + str(glob) + "\n")
-#sys.exit(0)
-
-#check_existance_infile()	# Returns IFF infile exists.
+check_existance_infile()	# Returns IFF infile exists.
 
 segments_from_args()		# Returns IFF all --segment specs check out syntactically ok.
 
@@ -760,33 +752,5 @@ if wait_available_thread_slots(glob.max_threads):
 _LOG(term.title + "\nDone.\n")
 
 sys.exit(0)
-
-# ./anim_pcb.py -d --in ../../universellt_pcb/universellt_pcb.kicad_pcb --out bajs.mp4 --res 320x240 -C -s "500 0.8 (10,11,12) 1.0 (13,14,15)" -s "500 1.1 (20,21,22) 1.2 (23,24,25)"
-
-
-# 2000 0.8 (0,0,0) 0.9 (30,40,50)
-#
-# Segment syntax:
-# "int float (int,int,int) float (int,int,int)"
-# "dur zoom1 (ax1,ay1,az1) zoom2 (ax2,ay2,az2)"
-#
-# Animated video segment dur milliseconds long from a rotation of ax1,ay1,az1 at a zoom of zoom1
-# to a rotation of ax2,ay2,az2 at a zoom of zoom2. Angles must be within -359..359.
-#
-# Example segment: --segment "1000 0.9 (0,0,0) 1.0 (10,120,240)"
-#
-#
-# mkdir -p tmp && kicad-cli-nightly pcb render --preset follow_pcb_editor --quality basic --perspective --rotate "0,0,0" --zoom 0.8 -w 320 -h 240 --background opaque -o tmp/img0001.jpg  ../../universellt_pcb/universellt_pcb.kicad_pcb
-
-
-#--rotate "0,0,0" --zoom 0.8 -w 320 -h 240 --background opaque -o tmp/img0001.jpg  ../../universellt_pcb/universellt_pcb.kicad_pcb
-
-#
-# 	0		0		0		rakt uppifrån, "icke-roterat"
-# 	x		0		0		rot runt kortets horisontella axel, medurs sett från vänstra sidan
-#	0		y		0		rot runt kortets vertikala axel, medurs sett från underkanten
-#	0		0		z		rot runt kortets normal, medurs sett underifrån (!)
-#
-#
 
 # "Emulsified high-fat offal tube"
