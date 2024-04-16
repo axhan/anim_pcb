@@ -1,11 +1,11 @@
 #!/usr/bin/python3
 
-import argparse, configparser, math, os.path, pathlib
-import random, shlex, string, sys, subprocess
+import argparse, math, os.path, pathlib
+import shlex, sys, subprocess, time
 from dataclasses import dataclass, field
 
 #***** Global variables ********************************************************
-global glob 	# 8 marsSet to new instance of class Globals in main()
+global glob 	# Instantiate to a Globals in main
 #***** Classes *****************************************************************
 
 # ANSI-sequences for text styles and colours when print()ing in terminal.
@@ -112,6 +112,15 @@ class Globals:
 	vid_ms:			float				=	0	# in ms
 	vid_s:			float				=	0	# in s
 
+	# Benchmarking
+	current_sec:	float		=	None
+	elapsed_sec:	float		=	None
+	frames_done:	int			=	0
+	frames_left:	int			=	None
+	remain_sec:		float		=	None
+	sec_per_frame:	float		=	0
+	start_sec:		float		=	None
+
 	# List of running processes
 	proc_list:		list[subprocess.Popen] = field(default_factory=list)
 # /class Globals
@@ -140,7 +149,7 @@ def _greySpace(txt: str) -> str:
 	fromChars = ' \t\n'
 	toChars = '\u2423\u21e5\u21b5'
 	return txt.translate(str.maketrans(fromChars, toChars))
-# /def _greySpace
+#/def _greySpace
 
 
 #***** Other functions *********************************************************
@@ -189,7 +198,6 @@ def wait_available_thread_slots(at_least: int = 1) -> bool:
 	#/def remove_returned
 
 	ret = remove_returned()
-#	_LOG(term.title + "Busy wait... \n")
 	while ((glob.max_threads - len(glob.proc_list)) < at_least):
 		ret |= remove_returned()
 
@@ -373,7 +381,8 @@ Zoom in from afar while rotating:
 	glob.vid_fps		=	args.fps
 	glob.vid_res		=	args.res
 
-	glob.img_base_name	=	os.path.join(glob.tmp_dir, os.path.basename(glob.pcb_file)) + ".FRAME_"
+	glob.img_base_name	=	os.path.join(glob.tmp_dir, os.path.basename(glob.pcb_file)
+										+ ".FRAME_")
 	glob.img_suffix		=	"." + glob.img_format
 	glob.segment_args.extend(args.segments)
 	glob.vid_fpms		=	glob.vid_fps / 1000
@@ -386,7 +395,6 @@ Zoom in from afar while rotating:
 	return		# reached iff no illegal arguments
 # /def parseArguments
 
-# 2000 0.8 (0,0,0) 0.9 (30,40,50)
 
 def segments_from_args() -> None:
 
@@ -433,24 +441,17 @@ def segments_from_args() -> None:
 			dur_s = tmp_lst[0].rstrip("sm")
 			rest_s = tmp_lst[1]
 
-#		_LOG(term.title + "dur_s, rest_s: " + term.values + "\"" + dur_s + "\", \"" +
-#				rest_s + "\"\n")
 		try:
 			seg.dur = float(dur_s) / div
 		except Exception as e:
 			SYN_ERR(str(e))
-
-#		_LOG(term.title + "dur = " + term.values + str(seg.dur) + "s\n")
 
 		if rest_s.count("->") != 1:
 			SYN_ERR(rest_s)
 		else:
 			(tmp_l_str , tmp_slask, tmp_r_str) = rest_s.partition("->")
 
-#		expr_l_lst,	expr_r_lst	=	[], 					[]
 		tmp_l_lst,	tmp_r_lst	=	tmp_l_str.split(")"),	tmp_r_str.split(")")
-#		_LOG(term.title + "tmp_l_lst :" + term.values + str(tmp_l_lst) + "\n")
-#		_LOG(term.title + "tmp_r_lst :" + term.values + str(tmp_r_lst) + "\n")
 
 		l_incl_zoom = l_incl_rot = l_incl_pan = l_incl_piv = False
 
@@ -475,7 +476,6 @@ def segments_from_args() -> None:
 					(seg.fr_pivx,seg.fr_pivy,seg.fr_pivz) = triplex(snws[4:], snws)
 				else:
 					SYN_ERR(glob.segment_args[i])
-#				expr_l_lst.append(snws)
 		for s in tmp_r_lst:
 			snws = ''.join(s.split())
 			if len(snws) > 0:
@@ -496,11 +496,6 @@ def segments_from_args() -> None:
 					(seg.to_pivx,seg.to_pivy,seg.to_pivz) = triplex(snws[4:], snws)
 				else:
 					SYN_ERR(glob.segment_args[i])
-#				expr_r_lst.append(snws)
-#		_LOG(term.title + "expr_l_lst :" + term.values + str(tmp_l_lst) + "\n")
-#		_LOG(term.title + "expr_r_lst :" + term.values + str(tmp_r_lst) + "\n")
-# x rot pan piv
-#		_LOG(str(glob.vid_fps) + "\n")
 
 
 		if ((seg.incl_zoom != l_incl_zoom) or (seg.incl_rot != l_incl_rot)
@@ -520,9 +515,6 @@ def segments_from_args() -> None:
 		seg.d_pivx	= (seg.to_pivx - seg.fr_pivx) / seg.frames
 		seg.d_pivy	= (seg.to_pivy - seg.fr_pivy) / seg.frames
 		seg.d_pivz	= (seg.to_pivz - seg.fr_pivz) / seg.frames
-
-#		_LOG(term.values + str(seg) + "\n" + term.normal)
-
 
 		glob.segments.append(seg);
 		glob.vid_ms += seg.dur * 1000
@@ -598,14 +590,16 @@ def render_frames() -> None:
 			wait_available_thread_slots(1)
 
 			frame_filename = glob.img_base_name + f"{frame_index:06d}" + glob.img_suffix
-
-			_LOG(term.title + "\nSegment " + term.values + f"{seg_index:3d}" + term.title +
-					" frame " + term.values + f"{frame_index:4d}" + term.title + ", \"" +
-					term.values + f"{frame_filename}" + term.title + "\" ... ")
+			(m, s) = bench_get_min_sec()
+			m = min(m, 999)
+			_LOG(term.title + f"\nT(left) {m:03d}:{s:02d} segm " + term.values +
+				f"{seg_index:3d}" + term.title +
+				" fr " + term.values + f"{frame_index:4d}" + term.title + ", \"" +
+				term.values + f"{frame_filename}" + term.title + "\" ... ")
 
 			if os.path.exists(frame_filename):
 				if not glob.overwrite:
-					_LOG("skipped ")
+					_LOG("keeping ")
 					skip = True
 				else:
 					_LOG("re-rendering ")
@@ -663,6 +657,7 @@ def render_frames() -> None:
 			pivz += seg.d_pivz
 
 			frame_index += 1
+			bench_update(1)
 	_LOG("\n")
 	return
 
@@ -694,6 +689,32 @@ def create_video_file() -> None:
 			run_thread(glob.ffmpeg_exe, arglist)
 	return
 # /def create_video_file
+
+
+def bench_init() -> None:
+	glob.elapsed_sec = 0
+	glob.remain_sec = 0
+	glob.start_sec = time.monotonic()
+	glob.frames_left = glob.vid_frames
+	return
+#/def bench_init
+
+
+def bench_update(frames_done:int = 1) -> None:
+	glob.current_sec = time.monotonic()
+	glob.elapsed_sec = glob.current_sec - glob.start_sec
+	glob.frames_done += frames_done
+	glob.frames_left -= frames_done
+
+	if glob.frames_done != 0:
+		glob.sec_per_frame = glob.elapsed_sec / float(glob.frames_done)
+
+	glob.remain_sec = glob.sec_per_frame * glob.frames_left
+	return
+
+
+def bench_get_min_sec() -> (int, int):
+	return divmod(int(glob.remain_sec), 60)
 #***** Main ********************************************************************
 
 glob = Globals()
@@ -722,6 +743,7 @@ segments_from_args()		# Returns IFF all --segment specs check out syntactically 
 
 _DBG(term.title + "\nGLOBALS " + term.extra + glob.__repr__() + '\n' + term.normal)
 
+bench_init()
 render_frames()
 
 if wait_available_thread_slots(glob.max_threads):
