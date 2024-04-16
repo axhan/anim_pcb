@@ -1,8 +1,9 @@
 # anim_pcb
 Command line utility creating raytraced/rendered animation videos from a collection of parameters and an arbitrary .kicad_pcb file using the new-ish "pcb render" image export feature in kicad-cli-nightly together with ffmpeg as the final step. Multiple kicad-cli-nightly instances are run in parallel, the raytracing in kicad-cli-nightly is very CPU bound and one instance per core reduces the time of the entire adventure almost to 1/#cores.
 
+The code is written in Python by me - not being a Python programmer - prioritizing function over form. Caveat emptor.
 
-anim_pcb arguments help `./anim_pcb -h`
+anim_pcb arguments help including the animation description syntax:`./anim_pcb -h`
 
 Also, see `kicad-cli-nightly pcb render --help`
 
