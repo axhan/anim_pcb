@@ -5,9 +5,6 @@ The code is written in Python by me - not being a Python programmer - prioritizi
 
 anim_pcb arguments help including the animation description syntax:`./anim_pcb -h`
 
-Also, see `kicad-cli-nightly pcb render --help`
-
-
 <details>
 <summary>./anim_pcb -h</summary><p>
 
@@ -107,6 +104,7 @@ Zoom in from afar while rotating:
 
 </p></details>
 
+Also, see `kicad-cli-nightly pcb render --help`
 
 ## Demo case 1
 
